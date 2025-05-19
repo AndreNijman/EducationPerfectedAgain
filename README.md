@@ -22,7 +22,7 @@ For listening questions it builds the audio map by clicking each speaker icon in
 
 2. Install [Node.js](https://nodejs.org/) v14+.
 
-3. In the project folder, run:
+3. In the project folder, in a terminal run:
 
    ```bash
    npm install puppeteer
@@ -32,13 +32,15 @@ For listening questions it builds the audio map by clicking each speaker icon in
 
 ## Usage
 
-```bash
-node index.js
-```
+1. Run this command in the project folder terminal:
 
-1. A Chrome window opens and logs you in automatically.
+   ```bash
+   node index.js
+   ```
 
-2. On any task page, use the floating panel:
+2. A Chrome window opens and logs you in automatically.
+
+3. On any task page, use the floating panel:
 
    * 🔄 **Refresh Words**: clears and reloads the text translation dictionary
    * 🔊 **Refresh Audio**: clears dictionaries and rebuilds audio map by automatically clicking each speaker icon
