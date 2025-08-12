@@ -2,12 +2,8 @@ const puppeteer = require('puppeteer');
 
 (async () => {
     const DIR = {
-        email: process.argv[2],
-        password: process.argv[3],
         loginUrl: 'https://app.educationperfect.com/app/login',
         selectors: {
-            username: '#loginId',
-            password: '#password',
             baseWords: 'div.baseLanguage.question-label.native-font.ng-binding',
             targetWords: 'div.targetLanguage.question-label.native-font.ng-binding',
             questionText: '#question-text.native-font',
@@ -21,9 +17,10 @@ const puppeteer = require('puppeteer');
         }
     };
 
-    let dict = {}, shortDict = {}, audioMap = {};
+    let dict = {}, reverseDict = {}, audioMap = {};
     let running = false;
     let mode = 'delay';
+    let question_mode = '';
 
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const cleanString = s => String(s).replace(/\([^)]*\)/g, '').split(/[;]/)[0].trim();
@@ -38,9 +35,13 @@ const puppeteer = require('puppeteer');
     }
 
     async function refreshAll() {
-        await notify('Please wait while the bot refreshes the word lists. This may take a minute.');
+        await notify('Please wait while the bot refreshes the word lists. This may take a few seconds.');
+        await page.evaluate(() => {
+            document.getElementById('refresh-btn').style.backgroundColor = 'lightyellow';
+            document.getElementById('ep-control-panel').style.backgroundColor = 'lightyellow';
+        }, running);
         dict = {};
-        shortDict = {};
+        reverseDict = {};
         audioMap = {};
 
         try {
@@ -51,7 +52,7 @@ const puppeteer = require('puppeteer');
                 const b = cleanString(bRaw);
                 if (t && b) {
                     dict[t] = b;
-                    shortDict[t] = b;
+                    reverseDict[b] = t.split(",")[0].trim();
                 }
             });
         } catch {}
@@ -72,19 +73,26 @@ const puppeteer = require('puppeteer');
             }
         } catch {}
 
+        question_mode = await page.evaluate(() => {
+            return document.querySelectorAll('.selected[ng-click="starter.selectLearningMode(item)"]')[0].children[1].children[0].children[0].textContent.toString();
+        });
+
         let totalEntries = Object.keys(dict).length;
         let entriesWithAudio = Object.values(dict).filter(v =>
             Object.values(audioMap).includes(v)
         ).length;
 
         let message = `All word lists refreshed:\nTotal entries: ${totalEntries}\nWith audio: ${entriesWithAudio}\n\n`;
-        for (const [k, v] of Object.entries(dict)) {
-            const link = Object.entries(audioMap).find(([, word]) => word === v)?.[0] || 'no audio';
-            message += `${k} → ${v} (${link})\n`;
-        }
+        // for (const [k, v] of Object.entries(dict)) {
+        //     const link = Object.entries(audioMap).find(([, word]) => word === v)?.[0] || 'no audio';
+        //     message += `${k} → ${v} (${link})\n\n`;
+        // }
         await notify(message);
+        await page.evaluate(() => {
+            document.getElementById('refresh-btn').style.backgroundColor = '#f0f0f0';
+            document.getElementById('ep-control-panel').style.backgroundColor = '#fff';
+        }, running);
     }
-
 
     async function fixAnswer(lastAnswer) {
         try {
@@ -97,9 +105,14 @@ const puppeteer = require('puppeteer');
     }
 
     async function loopAnswers() {
+        let answer;
+        let last_answer;
+        let qText = '';
+
+        if ((question_mode === 'Dictation' || question_mode === 'Listening') && mode !== "auto") {
+            notify("Due to some vocabulary having multiple audio, semi and delay mode may get questions wrong. Auto mode is recommended for this.")
+        }
         while (running) {
-            let answer;
-            let qText = '';
             try {
                 qText = await page.$eval(DIR.selectors.questionText, el => el.textContent.trim());
             } catch {}
@@ -108,10 +121,8 @@ const puppeteer = require('puppeteer');
                 const cleaned = cleanString(qText).split(/[;,]/)[0].trim();
                 if (dict[cleaned]) {
                     answer = dict[cleaned];
-                } else if (shortDict[cleaned]) {
-                    answer = shortDict[cleaned];
-                } else if (Object.values(dict).includes(cleaned)) {
-                    answer = Object.keys(dict).find(k => dict[k] === cleaned);
+                } else if (reverseDict[cleaned]) {
+                    answer = reverseDict[cleaned]
                 } else {
                     answer = randStr(8, 10);
                 }
@@ -126,13 +137,23 @@ const puppeteer = require('puppeteer');
                         src = await page.evaluate(() => window.lastAudioSrc || null);
                     }
                 } catch {}
-                answer = (src && audioMap[src]) || randStr(8, 10);
-               // await notify(`Audio question: src="${src}"\nAnswer: "${answer}"`);
+                if (question_mode === "Dictation") {
+                    answer = (src && reverseDict[audioMap[src]]) || randStr(8, 10);
+                } else {
+                    answer = (src && audioMap[src]) || randStr(8, 10);
+                }
+            //    await notify(`Audio question: src="${src}"\nAnswer: "${answer}"`);
+            }
+            
+            if (answer === last_answer) {
+                continue;
+            } else {
+                last_answer = answer;
             }
 
             await page.click(DIR.selectors.answerInput, { clickCount: 3 });
             await page.keyboard.sendCharacter(answer);
-
+            
             if (mode === 'auto') {
                 await page.keyboard.press('Enter');
             } else if (mode === 'delay') {
@@ -149,21 +170,24 @@ const puppeteer = require('puppeteer');
 
     async function toggleRun() {
         running = !running;
-        await notify(running ? 'Auto-answer started' : 'Auto-answer stopped');
         await page.evaluate(run => {
             document.getElementById('start-btn').style.backgroundColor = run ? 'lightgreen' : '#f0f0f0';
+            document.getElementById('ep-control-panel').style.backgroundColor = run ? 'lightgreen' : '#fff';
         }, running);
 
         if (running) {
-            loopAnswers().catch(err => {
+            await loopAnswers().catch(err => {
                 running = false;
+            });
+            await page.evaluate(() => {
+                document.getElementById('start-btn').style.backgroundColor = '#f0f0f0';
+                document.getElementById('ep-control-panel').style.backgroundColor = '#fff';
             });
         }
     }
 
     async function setMode(newMode) {
         mode = newMode;
-        await notify(`Mode: ${newMode}`);
         await page.evaluate(active => {
             ['Auto', 'Semi', 'Delay'].forEach(l => {
                 const btn = document.getElementById(`mode-${l}`);
@@ -199,6 +223,7 @@ const puppeteer = require('puppeteer');
             const statusLine = `Mode: ${window.currentMode}`;
 
             panel.innerHTML = `
+                <div id="status-line" style="font-size:24px; color:#333; margin-bottom:8px;">SimplyPerfected v1.0.1</div>
                 <div style="margin-bottom:8px;">
                     <button id="refresh-btn" title="Refresh all (Alt+R)">🔄</button>
                     <button id="start-btn" title="Start/stop (Alt+S)">▶️</button>
@@ -258,8 +283,6 @@ const puppeteer = require('puppeteer');
         }, mode);
     }
 
-
-
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: null,
@@ -284,8 +307,4 @@ const puppeteer = require('puppeteer');
     page.on('load', initPanel);
 
     await page.goto(DIR.loginUrl);
-    await page.waitForSelector(DIR.selectors.username);
-    await page.type(DIR.selectors.username, DIR.email);
-    await page.type(DIR.selectors.password, DIR.password);
-    await page.keyboard.press('Enter');
 })();
