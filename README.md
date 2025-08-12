@@ -69,6 +69,6 @@ This project is provided for **educational purposes only** — to demonstrate an
 
 By using this software, you agree that:
 
-- ❌ The author (**André Nijman**) and forker (**Untitled Glacier**) are **not responsible** for how you use this bot.  
+- ❌ The authors (**André Nijman**) and (**Cyclate**) are **not responsible** for how you use this bot.  
 - ❌ Any misuse, such as violating platform rules or using it dishonestly, is **your responsibility**.  
 - ✅ This tool is meant for learning, testing, and teaching automation concepts only.
