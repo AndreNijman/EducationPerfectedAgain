@@ -58,7 +58,7 @@ Once inside a task, a floating panel appears:
 
 **Author:** André Nijman
 
-**Co-Auther:** Untitled Programmer (JustSoftware)
+**Co-Auther:** Cyclate (JustSoftware)
 
 
 ---
