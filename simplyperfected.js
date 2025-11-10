@@ -21,6 +21,17 @@ const puppeteer = require('puppeteer');
     let running = false;
     let mode = 'delay';
     let question_mode = '';
+    const MODE_LABELS = {
+        auto: 'Instant',
+        semi: 'Semi-auto',
+        delay: 'Delayed'
+    };
+    let stats = {
+        totalEntries: 0,
+        entriesWithAudio: 0,
+        lastRefresh: '—'
+    };
+    let panelMessage = 'Refresh the word list to begin.';
 
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const cleanString = s => String(s).replace(/\([^)]*\)/g, '').split(/[;]/)[0].trim();
@@ -30,16 +41,81 @@ const puppeteer = require('puppeteer');
         return Array.from({ length: len }).map(() => chars[Math.floor(Math.random() * chars.length)]).join('');
     };
 
+    async function renderPanelState({ highlightRefresh = false } = {}) {
+        const snapshot = {
+            totalEntries: stats.totalEntries,
+            entriesWithAudio: stats.entriesWithAudio,
+            lastRefresh: stats.lastRefresh
+        };
+        await page.evaluate(({ running, mode, stats, message, highlightRefresh, modeLabel }) => {
+            const panel = document.getElementById('ep-control-panel');
+            if (!panel) return;
+
+            const indicator = document.getElementById('panel-run-indicator');
+            if (indicator) {
+                indicator.textContent = running ? 'Running' : 'Idle';
+                indicator.classList.toggle('running', !!running);
+            }
+
+            const stateEl = document.getElementById('panel-state-value');
+            if (stateEl) stateEl.textContent = running ? 'Answering' : 'Idle';
+
+            const modeEl = document.getElementById('panel-mode-value');
+            if (modeEl) modeEl.textContent = modeLabel;
+
+            const entriesEl = document.getElementById('panel-entries-value');
+            if (entriesEl) entriesEl.textContent = stats.totalEntries;
+
+            const audioEl = document.getElementById('panel-audio-value');
+            if (audioEl) {
+                const pct = stats.totalEntries ? Math.round((stats.entriesWithAudio / stats.totalEntries) * 100) : 0;
+                audioEl.textContent = `${stats.entriesWithAudio} (${pct}% with audio)`;
+            }
+
+            const refreshEl = document.getElementById('panel-refresh-value');
+            if (refreshEl) refreshEl.textContent = stats.lastRefresh;
+
+            const messageEl = document.getElementById('panel-message');
+            if (messageEl) messageEl.textContent = message;
+
+            document.querySelectorAll('[data-mode-btn]').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-mode-btn') === mode);
+            });
+
+            const startBtn = document.getElementById('start-btn');
+            if (startBtn) {
+                startBtn.innerHTML = running
+                    ? '<span>⏹️</span><span>Stop</span>'
+                    : '<span>▶️</span><span>Start</span>';
+            }
+
+            if (highlightRefresh) {
+                panel.classList.add('ep-panel-pulse');
+                setTimeout(() => panel.classList.remove('ep-panel-pulse'), 800);
+            }
+        }, {
+            running,
+            mode,
+            stats: snapshot,
+            message: panelMessage,
+            highlightRefresh,
+            modeLabel: MODE_LABELS[mode] || mode
+        });
+    }
+
+    async function syncPanelState({ message, highlightRefresh = false } = {}) {
+        if (typeof message === 'string') {
+            panelMessage = message;
+        }
+        await renderPanelState({ highlightRefresh }).catch(() => {});
+    }
+
     async function notify(msg) {
         await page.evaluate(message => alert(message), msg);
     }
 
     async function refreshAll() {
-        await notify('Please wait while the bot refreshes the word lists. This may take a few seconds.');
-        await page.evaluate(() => {
-            document.getElementById('refresh-btn').style.backgroundColor = 'lightyellow';
-            document.getElementById('ep-control-panel').style.backgroundColor = 'lightyellow';
-        }, running);
+        await syncPanelState({ message: 'Refreshing word lists…' });
         dict = {};
         reverseDict = {};
         audioMap = {};
@@ -82,16 +158,20 @@ const puppeteer = require('puppeteer');
             Object.values(audioMap).includes(v)
         ).length;
 
+        stats.totalEntries = totalEntries;
+        stats.entriesWithAudio = entriesWithAudio;
+        stats.lastRefresh = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
         let message = `All word lists refreshed:\nTotal entries: ${totalEntries}\nWith audio: ${entriesWithAudio}\n\n`;
         // for (const [k, v] of Object.entries(dict)) {
         //     const link = Object.entries(audioMap).find(([, word]) => word === v)?.[0] || 'no audio';
         //     message += `${k} → ${v} (${link})\n\n`;
         // }
         await notify(message);
-        await page.evaluate(() => {
-            document.getElementById('refresh-btn').style.backgroundColor = '#f0f0f0';
-            document.getElementById('ep-control-panel').style.backgroundColor = '#fff';
-        }, running);
+        await syncPanelState({
+            message: `Loaded ${totalEntries} entries · ${entriesWithAudio} with audio`,
+            highlightRefresh: true
+        });
     }
 
     async function fixAnswer(lastAnswer) {
@@ -170,81 +250,249 @@ const puppeteer = require('puppeteer');
 
     async function toggleRun() {
         running = !running;
-        await page.evaluate(run => {
-            document.getElementById('start-btn').style.backgroundColor = run ? 'lightgreen' : '#f0f0f0';
-            document.getElementById('ep-control-panel').style.backgroundColor = run ? 'lightgreen' : '#fff';
-        }, running);
+        await syncPanelState({
+            message: running
+                ? `Answering in ${MODE_LABELS[mode] || mode} mode`
+                : 'Bot paused. Refresh (Alt+R) when changing tasks.'
+        });
 
         if (running) {
-            await loopAnswers().catch(err => {
+            try {
+                await loopAnswers();
+            } catch (err) {
                 running = false;
-            });
-            await page.evaluate(() => {
-                document.getElementById('start-btn').style.backgroundColor = '#f0f0f0';
-                document.getElementById('ep-control-panel').style.backgroundColor = '#fff';
-            });
+            }
+            if (!running) {
+                await syncPanelState({
+                    message: 'Bot stopped. Adjust the mode or refresh to continue.'
+                });
+            }
         }
     }
 
     async function setMode(newMode) {
         mode = newMode;
-        await page.evaluate(active => {
-            ['Auto', 'Semi', 'Delay'].forEach(l => {
-                const btn = document.getElementById(`mode-${l}`);
-                if (btn) {
-                    btn.style.backgroundColor = l.toLowerCase() === active ? 'lightgreen' : '#f0f0f0';
-                }
-            });
-        }, mode);
+        await syncPanelState({
+            message: running
+                ? `Answering in ${MODE_LABELS[mode] || mode} mode`
+                : `Mode set to ${MODE_LABELS[mode] || mode}. Press Refresh before starting.`
+        });
     }
 
     async function initPanel() {
         await page.evaluate(currentMode => {
             if (document.querySelector('#ep-control-panel')) return;
 
-            window.currentMode = currentMode || 'delay';
-            window.running = window.running || false;
+            if (!document.getElementById('ep-panel-style')) {
+                const style = document.createElement('style');
+                style.id = 'ep-panel-style';
+                style.textContent = `
+                    #ep-control-panel {
+                        position: fixed;
+                        top: 16px;
+                        right: 24px;
+                        width: 320px;
+                        padding: 18px;
+                        background: #ffffff;
+                        border-radius: 18px;
+                        border: 1px solid rgba(15, 23, 42, 0.08);
+                        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                        font-size: 13px;
+                        color: #0f172a;
+                        z-index: 9999;
+                    }
+                    #ep-control-panel button {
+                        font-family: inherit;
+                    }
+                    #ep-control-panel .ep-panel-header {
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: flex-start;
+                        gap: 8px;
+                        margin-bottom: 14px;
+                    }
+                    #ep-control-panel .ep-panel-title {
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: #0f172a;
+                    }
+                    #ep-control-panel .ep-panel-version {
+                        font-size: 11px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.08em;
+                        color: #64748b;
+                        margin-bottom: 2px;
+                    }
+                    #ep-control-panel .ep-run-indicator {
+                        font-size: 11px;
+                        font-weight: 700;
+                        text-transform: uppercase;
+                        padding: 4px 12px;
+                        border-radius: 999px;
+                        background: #cbd5f5;
+                        color: #1e1b4b;
+                    }
+                    #ep-control-panel .ep-run-indicator.running {
+                        background: #16a249;
+                        color: #ffffff;
+                    }
+                    #ep-control-panel .ep-panel-hide {
+                        border: none;
+                        background: transparent;
+                        color: #94a3b8;
+                        cursor: pointer;
+                        font-size: 16px;
+                        padding: 2px 4px;
+                    }
+                    #ep-control-panel .ep-panel-hide:hover {
+                        color: #475569;
+                    }
+                    #ep-control-panel .ep-panel-actions,
+                    #ep-control-panel .ep-panel-modes {
+                        display: flex;
+                        gap: 10px;
+                        margin-bottom: 12px;
+                    }
+                    #ep-control-panel .ep-panel-actions button,
+                    #ep-control-panel .ep-panel-modes button {
+                        flex: 1;
+                    }
+                    #ep-control-panel .ep-panel-btn {
+                        border-radius: 12px;
+                        border: 1px solid #d2d6dc;
+                        background: #f8fafc;
+                        padding: 10px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 6px;
+                        font-size: 13px;
+                        cursor: pointer;
+                        transition: all 0.2s ease;
+                    }
+                    #ep-control-panel .ep-panel-btn:hover {
+                        background: #eef2ff;
+                        border-color: #94a3b8;
+                    }
+                    #ep-control-panel .ep-panel-btn.active {
+                        background: #d9fdd3;
+                        border-color: #16a249;
+                        color: #065f46;
+                        box-shadow: inset 0 0 0 1px rgba(6, 95, 70, 0.28);
+                    }
+                    #ep-control-panel .ep-panel-stats {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                        gap: 10px;
+                        margin-bottom: 12px;
+                    }
+                    #ep-control-panel .ep-stat {
+                        background: #f8fafc;
+                        border-radius: 12px;
+                        padding: 10px;
+                    }
+                    #ep-control-panel .ep-stat-label {
+                        font-size: 11px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.08em;
+                        color: #94a3b8;
+                        margin-bottom: 4px;
+                    }
+                    #ep-control-panel .ep-stat-value {
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #0f172a;
+                    }
+                    #ep-control-panel .ep-panel-message {
+                        background: #eef2ff;
+                        border-radius: 12px;
+                        padding: 10px;
+                        font-size: 12px;
+                        color: #1e1b4b;
+                        min-height: 38px;
+                        margin-bottom: 10px;
+                    }
+                    #ep-control-panel .ep-panel-shortcuts {
+                        font-size: 11px;
+                        color: #475569;
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 6px;
+                        justify-content: space-between;
+                    }
+                    #ep-control-panel.ep-panel-pulse {
+                        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.35), 0 24px 60px rgba(15, 23, 42, 0.28);
+                    }
+                `;
+                document.head.appendChild(style);
+            }
 
             const panel = document.createElement('div');
             panel.id = 'ep-control-panel';
-            Object.assign(panel.style, {
-                position: 'fixed',
-                top: '10px',
-                right: '120px',
-                padding: '10px',
-                backgroundColor: '#fff',
-                border: '1px solid #ccc',
-                borderRadius: '8px',
-                zIndex: 9999,
-                fontFamily: 'sans-serif',
-                boxShadow: '0 0 10px rgba(0,0,0,0.1)'
-            });
-
-            const statusLine = `Mode: ${window.currentMode}`;
-
             panel.innerHTML = `
-                <div id="status-line" style="font-size:24px; color:#333; margin-bottom:8px;">SimplyPerfected v1.0.1</div>
-                <div style="margin-bottom:8px;">
-                    <button id="refresh-btn" title="Refresh all (Alt+R)">🔄</button>
-                    <button id="start-btn" title="Start/stop (Alt+S)">▶️</button>
-                    <button id="mode-Auto" title="Instant (Alt+1)">⚡</button>
-                    <button id="mode-Semi" title="Semi-auto (Alt+2)">⏸️</button>
-                    <button id="mode-Delay" title="Delayed (Alt+3)" style="background-color:lightgreen;">⏱️</button>
-                    <button id="hide-panel" title="Hide panel">❌</button>
+                <div class="ep-panel-header">
+                    <div>
+                        <div class="ep-panel-version">SimplyPerfected v1.0.1</div>
+                        <div class="ep-panel-title">Control Panel</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <div id="panel-run-indicator" class="ep-run-indicator">Idle</div>
+                        <button id="hide-panel" class="ep-panel-hide" title="Hide panel">✕</button>
+                    </div>
                 </div>
-                <div id="status-line" style="font-size:12px; color:#333;">
-                    ${statusLine}
+                <div class="ep-panel-actions">
+                    <button id="refresh-btn" class="ep-panel-btn" title="Refresh all (Alt+R)">
+                        <span>🔄</span><span>Refresh</span>
+                    </button>
+                    <button id="start-btn" class="ep-panel-btn" title="Start/stop (Alt+S)">
+                        <span>▶️</span><span>Start</span>
+                    </button>
                 </div>
-                <div style="font-size:11px; color:#666; margin-top:6px;">Alt+S to start/stop</div>
+                <div class="ep-panel-modes">
+                    <button id="mode-Auto" data-mode-btn="auto" class="ep-panel-btn" title="Instant (Alt+1)">
+                        <span>⚡</span><span>Instant</span>
+                    </button>
+                    <button id="mode-Semi" data-mode-btn="semi" class="ep-panel-btn" title="Semi-auto (Alt+2)">
+                        <span>⏸️</span><span>Semi</span>
+                    </button>
+                    <button id="mode-Delay" data-mode-btn="delay" class="ep-panel-btn" title="Delayed (Alt+3)">
+                        <span>⏱️</span><span>Delay</span>
+                    </button>
+                </div>
+                <div class="ep-panel-stats">
+                    <div class="ep-stat">
+                        <div class="ep-stat-label">Mode</div>
+                        <div id="panel-mode-value" class="ep-stat-value">—</div>
+                    </div>
+                    <div class="ep-stat">
+                        <div class="ep-stat-label">State</div>
+                        <div id="panel-state-value" class="ep-stat-value">Idle</div>
+                    </div>
+                    <div class="ep-stat">
+                        <div class="ep-stat-label">Entries</div>
+                        <div id="panel-entries-value" class="ep-stat-value">0</div>
+                    </div>
+                    <div class="ep-stat">
+                        <div class="ep-stat-label">Audio Map</div>
+                        <div id="panel-audio-value" class="ep-stat-value">0 (0% with audio)</div>
+                    </div>
+                    <div class="ep-stat">
+                        <div class="ep-stat-label">Last Refresh</div>
+                        <div id="panel-refresh-value" class="ep-stat-value">—</div>
+                    </div>
+                </div>
+                <div id="panel-message" class="ep-panel-message">Select a mode and refresh to build your word list.</div>
+                <div class="ep-panel-shortcuts">
+                    <span>Alt+R Refresh</span>
+                    <span>Alt+S Start</span>
+                    <span>Alt+1 Instant</span>
+                    <span>Alt+2 Semi</span>
+                    <span>Alt+3 Delay</span>
+                </div>
             `;
 
             document.body.appendChild(panel);
-
-            const setStatus = msg => {
-                const el = document.getElementById('status-line');
-                if (el) el.textContent = msg;
-            };
-            window.setStatus = setStatus;
 
             document.getElementById('refresh-btn').onclick = window.refresh;
             document.getElementById('start-btn').onclick = window.startAnswer;
@@ -256,14 +504,18 @@ const puppeteer = require('puppeteer');
                 panel.style.display = 'none';
                 const showBtn = document.createElement('button');
                 showBtn.textContent = '📋';
-                showBtn.title = 'Show panel';
+                showBtn.title = 'Show SimplyPerfected panel';
                 Object.assign(showBtn.style, {
                     position: 'fixed',
-                    top: '10px',
-                    right: '120px',
+                    top: '16px',
+                    right: '24px',
                     zIndex: 9999,
-                    padding: '4px',
-                    fontSize: '16px'
+                    padding: '6px 12px',
+                    borderRadius: '999px',
+                    border: '1px solid #d2d6dc',
+                    background: '#ffffff',
+                    cursor: 'pointer',
+                    boxShadow: '0 16px 30px rgba(15, 23, 42, 0.18)'
                 });
                 showBtn.onclick = () => {
                     panel.style.display = 'block';
@@ -281,6 +533,8 @@ const puppeteer = require('puppeteer');
                 if (e.key === '3') window.setDelay();
             });
         }, mode);
+
+        await syncPanelState();
     }
 
     const browser = await puppeteer.launch({
