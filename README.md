@@ -7,68 +7,90 @@
 
 ## 📘 Overview
 > [!CAUTION]
-> Multi-word terms in a target language can cause issues with audio related tasks.
+> Multi‑word terms in the target language can still confuse the Education Perfect audio tasks. Refresh whenever you swap lists or learning modes.
 
-**SimplyPerfected** automates translation and listening tasks on [Education Perfect](https://www.educationperfect.com/).
+**SimplyPerfected** is a Puppeteer-powered helper for [Education Perfect](https://www.educationperfect.com/) that captures vocab lists, listens for audio prompts, and submits answers on your behalf. The in-task control panel now shows live stats, mode indicators, shortcut hints, and learning feedback so you always know what the bot is doing.
 
-- ✅ Launches a minimisable control panel inside the task window top bar
-- ✅ Supports text + audio questions
-- ✅ Learns from mistakes in real-time
-
-**SimplyPerfected** adds on top of **EducationPerfectedAgain**:
-- All modes support
-- Lighter package
-- Bug Fixes
-
-**Available Modes**:
-- ⚡ **Instant** – answers and submits immediately  
-- ⏸️ **Semi-Auto** – waits for you to hit Enter  
-- ⏱️ **Delayed** – default mode, submits after a short delay  
+### Key features
+- 🚀 Instant, Semi-auto, and Delayed answering modes with one-click switching
+- 🧠 Auto-learning: wrong answers are added to the dictionary immediately
+- 🔊 Audio mapping for listening/dictation style questions
+- 🧮 Panel stats showing entry counts, audio coverage, and last refresh time
+- 🎛️ Compact floating UI with hide/show toggle and keyboard shortcuts
 
 ---
 
-## 🛠 Getting Started
-
-**Download the latest `.zip` from the Releases Page.**
-1. Ensure node.js is installed ⚠️⚠️⚠️
-2. Extract the ZIP
-4. **Run `install.cmd` on first launch** to install Puppeteer, a dependency.
-5. Run `SimplyPerfected.cmd` to start.
-
-## 🗒️ Usage
-1. Open a translation task
-2. **Select a mode first (e.g. Reading, Dictation etc.)**
-3. Press the refresh button or Alt+R to add the words and audio to the database
-4. Press start on the mode and start the bot
-5. Refresh the bot when you change modes or when you change lists
-
-## 🧭 Control Panel Guide
-
-Once inside a task, a floating panel appears:
-
-| Icon  | Function              |
-|-------|------------------------|
-| 🔄    | **Refresh** — reloads word list and audio map *(wait for popup)*  
-| ▶️    | **Start/Stop** — toggles bot activity  
-| ⚡    | Instant — submit instantly  
-| ⏸️    | Semi-Auto — wait for Enter  
-| ⏱️    | Delayed — submit after a short delay  
+## 🧩 Requirements
+- Windows 10/11 or any OS that can run Node.js + Chromium
+- [Node.js](https://nodejs.org/) 18+ (needed for Puppeteer)
+- A valid Education Perfect login with access to vocab tasks
 
 ---
 
-**Author:** André Nijman
+## 🛠 Installation
+1. **Clone the repo**: `git clone https://github.com/AndreNijman/EducationPerfectedAgain.git && cd EducationPerfectedAgain`
+2. **Install dependencies** (first run only): `npm install`
+3. On Windows, you can still run `install.cmd` if you prefer a one-click setup—it simply runs `npm install` for you.
+4. Launch the bot with `SimplyPerfected.cmd` (Windows) or `node simplyperfected.js` (any platform).
 
-**Co-Auther:** Cyclate (JustSoftware)
+> If you prefer running from source, install dependencies with `npm install` and run `node simplyperfected.js`.
 
+---
+
+## ▶️ Usage Workflow
+1. Open an Education Perfect vocab/listening task in Chromium (the bot launches Chrome automatically).
+2. In the task UI, **pick the Education Perfect learning mode** (Reading, Dictation, Listening, etc.).
+3. Wait for the SimplyPerfected control panel to appear in the top-right corner.
+4. Press **Refresh** (`Alt+R`) to capture the current word list and audio map.
+5. Select your answering mode (⚡ Instant, ⏸️ Semi, ⏱️ Delay).
+6. Hit **Start** (`Alt+S`). The status chip turns green and the bot begins answering.
+7. Whenever you change lists, switch learning modes, or notice mismatches, press Refresh again.
+8. Use the hide (✕) button if the panel gets in the way; the 📋 button restores it.
+
+---
+
+## 🖥️ Control Panel Cheat Sheet
+
+| Icon/Button | Action | Notes |
+|-------------|--------|-------|
+| 🔄 Refresh  | Rebuilds the dictionary + audio cache | Panel highlights briefly when complete |
+| ▶️ Start / ⏹️ Stop | Toggles the answering loop | Status chip shows Idle/Running |
+| ⚡ Instant  | Submit immediately after typing | Best for text-only modes |
+| ⏸️ Semi-auto | Wait for you to press Enter | Manual pacing, safest for audio ambiguity |
+| ⏱️ Delay   | Adds a small random pause before Enter | Mimics human timing |
+| ✕ / 📋     | Hide or show the floating panel | Useful on smaller displays |
+
+### Keyboard shortcuts
+
+| Shortcut | What it does |
+|----------|--------------|
+| `Alt + R` | Refresh word and audio lists |
+| `Alt + S` | Start/stop the bot |
+| `Alt + 1` | Select Instant mode |
+| `Alt + 2` | Select Semi-auto mode |
+| `Alt + 3` | Select Delayed mode |
+
+---
+
+## 🧪 Tips & Troubleshooting
+- **Missed answer after a mistake?** The bot now rereads the correction modal automatically. If it still pauses, press Start again to resume, then Refresh.
+- **Audio not mapping?** Ensure your task has the preview grid with speaker icons visible. Refresh after toggling list filters.
+- **Chromium blocked by policies?** Launch the script as admin or specify a Puppeteer executable path in `simplyperfected.js`.
+- **Panel not showing?** Wait for the Education Perfect task to load fully, or reload the page—`page.on('load', initPanel)` re-injects the UI.
+
+---
+
+## ✍️ Authors
+- **André Nijman** – original author
+- **Cyclate (JustSoftware)** – co-author, refactors, and UI polish
 
 ---
 
 ## ⚖️ Disclaimer
+This repository is for **educational and research purposes only**. By running SimplyPerfected you agree that:
 
-This project is provided for **educational purposes only** — to demonstrate and explore how tools like, **Puppeteer**, and **Node.js** can be used to automate browser tasks, build desktop apps, and document technical workflows.
+- ❌ The authors are **not responsible** for how you use this software.
+- ❌ Any breach of Education Perfect’s terms of service or academic policies is **your responsibility**.
+- ✅ Use the project to study Puppeteer automation, UI overlays, and Node.js scripting—not to gain unfair academic advantage.
 
-By using this software, you agree that:
-
-- ❌ The authors (**André Nijman**) and (**Cyclate**) are **not responsible** for how you use this bot.  
-- ❌ Any misuse, such as violating platform rules or using it dishonestly, is **your responsibility**.  
-- ✅ This tool is meant for learning, testing, and teaching automation concepts only.
+Be respectful of the platforms you interact with and comply with local regulations, school policies, and ethical guidelines.
