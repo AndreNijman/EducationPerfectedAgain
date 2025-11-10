@@ -174,19 +174,38 @@ const puppeteer = require('puppeteer');
         });
     }
 
-    async function fixAnswer(lastAnswer) {
+    async function fixAnswer() {
         try {
             await page.waitForFunction(sel => document.querySelector(sel)?.textContent.trim().length > 0, {}, DIR.selectors.modalFields.question);
-            const correctText = await page.$eval(DIR.selectors.modalFields.correct, el => el.textContent);
-            dict[lastAnswer] = cleanString(correctText);
+            const modalData = await page.evaluate(selectors => {
+                const safeText = sel => {
+                    const el = document.querySelector(sel);
+                    return el ? el.textContent : '';
+                };
+                return {
+                    question: safeText(selectors.question),
+                    correct: safeText(selectors.correct)
+                };
+            }, DIR.selectors.modalFields);
+
+            const cleanedQuestion = cleanString(modalData.question);
+            const cleanedCorrect = cleanString(modalData.correct);
+
+            if (cleanedQuestion && cleanedCorrect) {
+                dict[cleanedQuestion] = cleanedCorrect;
+                reverseDict[cleanedCorrect] = cleanedQuestion.split(",")[0].trim();
+                await syncPanelState({ message: `Learned correction for "${cleanedQuestion}"` });
+            }
+
             await page.$eval(DIR.selectors.continueButton, btn => btn.disabled = false);
             await page.click(DIR.selectors.continueButton);
-        } catch (err) {}
+        } catch (err) {
+            await syncPanelState({ message: 'Unable to read correction modal. Please continue manually.' });
+        }
     }
 
     async function loopAnswers() {
         let answer;
-        let last_answer;
         let qText = '';
 
         if ((question_mode === 'Dictation' || question_mode === 'Listening') && mode !== "auto") {
@@ -225,12 +244,6 @@ const puppeteer = require('puppeteer');
             //    await notify(`Audio question: src="${src}"\nAnswer: "${answer}"`);
             }
             
-            if (answer === last_answer) {
-                continue;
-            } else {
-                last_answer = answer;
-            }
-
             await page.click(DIR.selectors.answerInput, { clickCount: 3 });
             await page.keyboard.sendCharacter(answer);
             
@@ -242,7 +255,7 @@ const puppeteer = require('puppeteer');
             }
 
             if (await page.$(DIR.selectors.modal)) {
-                await fixAnswer(answer);
+                await fixAnswer();
             }
         }
     }
