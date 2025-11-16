@@ -1,5 +1,9 @@
 {
+  "name": "education-perfected-again",
+  "version": "0.0.1",
+  "private": true,
   "dependencies": {
-    "puppeteer": "^24.29.1"
+    "puppeteer": "^24.29.1",
+    "semver": "^7.6.3"
   }
 }
