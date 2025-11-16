@@ -144,7 +144,7 @@ const Panel = {
     async init() {
         if (!state.page) return;
 
-        await state.page.evaluate(currentMode => {
+        await state.page.evaluate(() => {
             if (document.querySelector('#ep-control-panel')) return;
 
             if (!document.getElementById('ep-panel-style')) {
