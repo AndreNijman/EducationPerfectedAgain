@@ -1,299 +1,150 @@
+// main.js
 const puppeteer = require('puppeteer');
 
-(async () => {
-    const DIR = {
-        loginUrl: 'https://app.educationperfect.com/app/login',
-        selectors: {
-            baseWords: 'div.baseLanguage.question-label.native-font.ng-binding',
-            targetWords: 'div.targetLanguage.question-label.native-font.ng-binding',
-            questionText: '#question-text.native-font',
-            answerInput: 'input#answer-text',
-            continueButton: 'button#continue-button',
-            modal: 'div[uib-modal-window=modal-window]',
-            modalFields: {
-                question: 'td.field.native-font#question-field',
-                correct: 'td.field.native-font#correct-answer-field'
-            }
+// =======================
+// Constants & Utilities
+// =======================
+const DIR = {
+    loginUrl: 'https://app.educationperfect.com/app/login',
+    selectors: {
+        baseWords: 'div.baseLanguage.question-label.native-font.ng-binding',
+        targetWords: 'div.targetLanguage.question-label.native-font.ng-binding',
+        questionText: '#question-text.native-font',
+        answerInput: 'input#answer-text',
+        continueButton: 'button#continue-button',
+        modal: 'div[uib-modal-window=modal-window]',
+        modalFields: {
+            question: 'td.field.native-font#question-field',
+            correct: 'td.field.native-font#correct-answer-field'
         }
-    };
+    }
+};
 
-    let dict = {}, reverseDict = {}, audioMap = {};
-    let running = false;
-    let mode = 'delay';
-    let question_mode = '';
-    const MODE_LABELS = {
-        auto: 'Instant',
-        semi: 'Semi-auto',
-        delay: 'Delayed'
-    };
-    let stats = {
+const MODE_LABELS = {
+    auto: 'Instant',
+    semi: 'Semi-auto',
+    delay: 'Delayed'
+};
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const cleanString = s =>
+    String(s)
+        .replace(/\([^)]*\)/g, '')
+        .split(/[;]/)[0]
+        .trim();
+
+const randStr = (min, max) => {
+    const len = Math.floor(Math.random() * (max - min + 1)) + min;
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    return Array.from({ length: len })
+        .map(() => chars[Math.floor(Math.random() * chars.length)])
+        .join('');
+};
+
+// =======================
+// Global State
+// =======================
+const state = {
+    dict: {},
+    reverseDict: {},
+    audioMap: {},
+    running: false,
+    mode: 'delay',
+    questionMode: '',
+    stats: {
         totalEntries: 0,
         entriesWithAudio: 0,
         lastRefresh: '—'
-    };
-    let panelMessage = 'Refresh the word list to begin.';
+    },
+    panelMessage: 'Refresh the word list to begin.',
+    page: null
+};
 
-    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const cleanString = s => String(s).replace(/\([^)]*\)/g, '').split(/[;]/)[0].trim();
-    const randStr = (min, max) => {
-        const len = Math.floor(Math.random() * (max - min + 1)) + min;
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        return Array.from({ length: len }).map(() => chars[Math.floor(Math.random() * chars.length)]).join('');
-    };
+// =======================
+// Panel (UI) Management
+// =======================
+const Panel = {
+    async render({ highlightRefresh = false } = {}) {
+        if (!state.page) return;
 
-    async function renderPanelState({ highlightRefresh = false } = {}) {
         const snapshot = {
-            totalEntries: stats.totalEntries,
-            entriesWithAudio: stats.entriesWithAudio,
-            lastRefresh: stats.lastRefresh
+            totalEntries: state.stats.totalEntries,
+            entriesWithAudio: state.stats.entriesWithAudio,
+            lastRefresh: state.stats.lastRefresh
         };
-        await page.evaluate(({ running, mode, stats, message, highlightRefresh, modeLabel }) => {
-            const panel = document.getElementById('ep-control-panel');
-            if (!panel) return;
 
-            const indicator = document.getElementById('panel-run-indicator');
-            if (indicator) {
-                indicator.textContent = running ? 'Running' : 'Idle';
-                indicator.classList.toggle('running', !!running);
-            }
+        await state.page.evaluate(
+            ({ running, mode, stats, message, highlightRefresh, modeLabel }) => {
+                const panel = document.getElementById('ep-control-panel');
+                if (!panel) return;
 
-            const stateEl = document.getElementById('panel-state-value');
-            if (stateEl) stateEl.textContent = running ? 'Answering' : 'Idle';
-
-            const modeEl = document.getElementById('panel-mode-value');
-            if (modeEl) modeEl.textContent = modeLabel;
-
-            const entriesEl = document.getElementById('panel-entries-value');
-            if (entriesEl) entriesEl.textContent = stats.totalEntries;
-
-            const audioEl = document.getElementById('panel-audio-value');
-            if (audioEl) {
-                const pct = stats.totalEntries ? Math.round((stats.entriesWithAudio / stats.totalEntries) * 100) : 0;
-                audioEl.textContent = `${stats.entriesWithAudio} (${pct}% with audio)`;
-            }
-
-            const refreshEl = document.getElementById('panel-refresh-value');
-            if (refreshEl) refreshEl.textContent = stats.lastRefresh;
-
-            const messageEl = document.getElementById('panel-message');
-            if (messageEl) messageEl.textContent = message;
-
-            document.querySelectorAll('[data-mode-btn]').forEach(btn => {
-                btn.classList.toggle('active', btn.getAttribute('data-mode-btn') === mode);
-            });
-
-            const startBtn = document.getElementById('start-btn');
-            if (startBtn) {
-                startBtn.innerHTML = running
-                    ? '<span>⏹️</span><span>Stop</span>'
-                    : '<span>▶️</span><span>Start</span>';
-            }
-
-            if (highlightRefresh) {
-                panel.classList.add('ep-panel-pulse');
-                setTimeout(() => panel.classList.remove('ep-panel-pulse'), 800);
-            }
-        }, {
-            running,
-            mode,
-            stats: snapshot,
-            message: panelMessage,
-            highlightRefresh,
-            modeLabel: MODE_LABELS[mode] || mode
-        });
-    }
-
-    async function syncPanelState({ message, highlightRefresh = false } = {}) {
-        if (typeof message === 'string') {
-            panelMessage = message;
-        }
-        await renderPanelState({ highlightRefresh }).catch(() => {});
-    }
-
-    async function notify(msg) {
-        await page.evaluate(message => alert(message), msg);
-    }
-
-    async function refreshAll() {
-        await syncPanelState({ message: 'Refreshing word lists…' });
-        dict = {};
-        reverseDict = {};
-        audioMap = {};
-
-        try {
-            const base = await page.$$eval(DIR.selectors.baseWords, els => els.map(e => e.textContent));
-            const target = await page.$$eval(DIR.selectors.targetWords, els => els.map(e => e.textContent));
-            base.forEach((bRaw, i) => {
-                const t = cleanString(target[i] || '');
-                const b = cleanString(bRaw);
-                if (t && b) {
-                    dict[t] = b;
-                    reverseDict[b] = t.split(",")[0].trim();
+                const indicator = document.getElementById('panel-run-indicator');
+                if (indicator) {
+                    indicator.textContent = running ? 'Running' : 'Idle';
+                    indicator.classList.toggle('running', !!running);
                 }
-            });
-        } catch {}
 
-        try {
-            const items = await page.$$('.preview-grid .stats-item');
-            for (const item of items) {
-                const icon = await item.$('.sound-icon.has-sound');
-                if (!icon) continue;
-                const rawA = await item.$eval('.baseLanguage', el => el.textContent.trim());
-                const a = cleanString(rawA);
-                await page.evaluate(el => el.click(), icon);
-                await sleep(500);
-                const src = await page.evaluate(() => window.lastAudioSrc || null);
-                if (src) {
-                    audioMap[src] = a;
+                const stateEl = document.getElementById('panel-state-value');
+                if (stateEl) stateEl.textContent = running ? 'Answering' : 'Idle';
+
+                const modeEl = document.getElementById('panel-mode-value');
+                if (modeEl) modeEl.textContent = modeLabel;
+
+                const entriesEl = document.getElementById('panel-entries-value');
+                if (entriesEl) entriesEl.textContent = stats.totalEntries;
+
+                const audioEl = document.getElementById('panel-audio-value');
+                if (audioEl) {
+                    const pct = stats.totalEntries
+                        ? Math.round((stats.entriesWithAudio / stats.totalEntries) * 100)
+                        : 0;
+                    audioEl.textContent = `${stats.entriesWithAudio} (${pct}% with audio)`;
                 }
-            }
-        } catch {}
 
-        question_mode = await page.evaluate(() => {
-            return document.querySelectorAll('.selected[ng-click="starter.selectLearningMode(item)"]')[0].children[1].children[0].children[0].textContent.toString();
-        });
+                const refreshEl = document.getElementById('panel-refresh-value');
+                if (refreshEl) refreshEl.textContent = stats.lastRefresh;
 
-        let totalEntries = Object.keys(dict).length;
-        let entriesWithAudio = Object.values(dict).filter(v =>
-            Object.values(audioMap).includes(v)
-        ).length;
+                const messageEl = document.getElementById('panel-message');
+                if (messageEl) messageEl.textContent = message;
 
-        stats.totalEntries = totalEntries;
-        stats.entriesWithAudio = entriesWithAudio;
-        stats.lastRefresh = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        let message = `All word lists refreshed:\nTotal entries: ${totalEntries}\nWith audio: ${entriesWithAudio}\n\n`;
-        // for (const [k, v] of Object.entries(dict)) {
-        //     const link = Object.entries(audioMap).find(([, word]) => word === v)?.[0] || 'no audio';
-        //     message += `${k} → ${v} (${link})\n\n`;
-        // }
-        await notify(message);
-        await syncPanelState({
-            message: `Loaded ${totalEntries} entries · ${entriesWithAudio} with audio`,
-            highlightRefresh: true
-        });
-    }
-
-    async function fixAnswer() {
-        try {
-            await page.waitForFunction(sel => document.querySelector(sel)?.textContent.trim().length > 0, {}, DIR.selectors.modalFields.question);
-            const modalData = await page.evaluate(selectors => {
-                const safeText = sel => {
-                    const el = document.querySelector(sel);
-                    return el ? el.textContent : '';
-                };
-                return {
-                    question: safeText(selectors.question),
-                    correct: safeText(selectors.correct)
-                };
-            }, DIR.selectors.modalFields);
-
-            const cleanedQuestion = cleanString(modalData.question);
-            const cleanedCorrect = cleanString(modalData.correct);
-
-            if (cleanedQuestion && cleanedCorrect) {
-                dict[cleanedQuestion] = cleanedCorrect;
-                reverseDict[cleanedCorrect] = cleanedQuestion.split(",")[0].trim();
-                await syncPanelState({ message: `Learned correction for "${cleanedQuestion}"` });
-            }
-
-            await page.$eval(DIR.selectors.continueButton, btn => btn.disabled = false);
-            await page.click(DIR.selectors.continueButton);
-        } catch (err) {
-            await syncPanelState({ message: 'Unable to read correction modal. Please continue manually.' });
-        }
-    }
-
-    async function loopAnswers() {
-        let answer;
-        let qText = '';
-
-        if ((question_mode === 'Dictation' || question_mode === 'Listening') && mode !== "auto") {
-            notify("Due to some vocabulary having multiple audio, semi and delay mode may get questions wrong. Auto mode is recommended for this.")
-        }
-        while (running) {
-            try {
-                qText = await page.$eval(DIR.selectors.questionText, el => el.textContent.trim());
-            } catch {}
-
-            if (qText) {
-                const cleaned = cleanString(qText).split(/[;,]/)[0].trim();
-                if (dict[cleaned]) {
-                    answer = dict[cleaned];
-                } else if (reverseDict[cleaned]) {
-                    answer = reverseDict[cleaned]
-                } else {
-                    answer = randStr(8, 10);
-                }
-                //await notify(`Question: "${qText}"\nCleaned: "${cleaned}"\nAnswer: "${answer}"`);
-            } else {
-                let src = null;
-                try {
-                    const speaker = await page.$('.voice-speaker');
-                    if (speaker) {
-                        await page.evaluate(el => el.click(), speaker);
-                        await sleep(500);
-                        src = await page.evaluate(() => window.lastAudioSrc || null);
-                    }
-                } catch {}
-                if (question_mode === "Dictation") {
-                    answer = (src && reverseDict[audioMap[src]]) || randStr(8, 10);
-                } else {
-                    answer = (src && audioMap[src]) || randStr(8, 10);
-                }
-            //    await notify(`Audio question: src="${src}"\nAnswer: "${answer}"`);
-            }
-            
-            await page.click(DIR.selectors.answerInput, { clickCount: 3 });
-            await page.keyboard.sendCharacter(answer);
-            
-            if (mode === 'auto') {
-                await page.keyboard.press('Enter');
-            } else if (mode === 'delay') {
-                await sleep(Math.random() * 3000);
-                await page.keyboard.press('Enter');
-            }
-
-            if (await page.$(DIR.selectors.modal)) {
-                await fixAnswer();
-            }
-        }
-    }
-
-
-    async function toggleRun() {
-        running = !running;
-        await syncPanelState({
-            message: running
-                ? `Answering in ${MODE_LABELS[mode] || mode} mode`
-                : 'Bot paused. Refresh (Alt+R) when changing tasks.'
-        });
-
-        if (running) {
-            try {
-                await loopAnswers();
-            } catch (err) {
-                running = false;
-            }
-            if (!running) {
-                await syncPanelState({
-                    message: 'Bot stopped. Adjust the mode or refresh to continue.'
+                document.querySelectorAll('[data-mode-btn]').forEach(btn => {
+                    btn.classList.toggle('active', btn.getAttribute('data-mode-btn') === mode);
                 });
+
+                const startBtn = document.getElementById('start-btn');
+                if (startBtn) {
+                    startBtn.innerHTML = running
+                        ? '<span>⏹️</span><span>Stop</span>'
+                        : '<span>▶️</span><span>Start</span>';
+                }
+
+                if (highlightRefresh) {
+                    panel.classList.add('ep-panel-pulse');
+                    setTimeout(() => panel.classList.remove('ep-panel-pulse'), 800);
+                }
+            },
+            {
+                running: state.running,
+                mode: state.mode,
+                stats: snapshot,
+                message: state.panelMessage,
+                highlightRefresh,
+                modeLabel: MODE_LABELS[state.mode] || state.mode
             }
+        );
+    },
+
+    async sync({ message, highlightRefresh = false } = {}) {
+        if (typeof message === 'string') {
+            state.panelMessage = message;
         }
-    }
+        await Panel.render({ highlightRefresh }).catch(() => {});
+    },
 
-    async function setMode(newMode) {
-        mode = newMode;
-        await syncPanelState({
-            message: running
-                ? `Answering in ${MODE_LABELS[mode] || mode} mode`
-                : `Mode set to ${MODE_LABELS[mode] || mode}. Press Refresh before starting.`
-        });
-    }
+    async init() {
+        if (!state.page) return;
 
-    async function initPanel() {
-        await page.evaluate(currentMode => {
+        await state.page.evaluate(currentMode => {
             if (document.querySelector('#ep-control-panel')) return;
 
             if (!document.getElementById('ep-panel-style')) {
@@ -545,33 +396,279 @@ const puppeteer = require('puppeteer');
                 if (e.key === '2') window.setSemi();
                 if (e.key === '3') window.setDelay();
             });
-        }, mode);
+        }, state.mode);
 
-        await syncPanelState();
+        await Panel.sync();
     }
+};
 
-    const browser = await puppeteer.launch({
-        headless: false,
-        defaultViewport: null,
-        args: ['--start-maximized']
-    });
-    const [page] = await browser.pages();
+// =======================
+// Vocabulary & Audio Map
+// =======================
+const Vocabulary = {
+    async refreshAll() {
+        await Panel.sync({ message: 'Refreshing word lists…' });
 
-    await page.evaluateOnNewDocument(() => {
-        window.lastAudioSrc = null;
-        const origPlay = HTMLAudioElement.prototype.play;
-        HTMLAudioElement.prototype.play = function () {
-            window.lastAudioSrc = this.src;
-            return origPlay.call(this);
-        };
-    });
+        state.dict = {};
+        state.reverseDict = {};
+        state.audioMap = {};
 
-    await page.exposeFunction('refresh', refreshAll);
-    await page.exposeFunction('startAnswer', toggleRun);
-    await page.exposeFunction('setAuto', () => setMode('auto'));
-    await page.exposeFunction('setSemi', () => setMode('semi'));
-    await page.exposeFunction('setDelay', () => setMode('delay'));
-    page.on('load', initPanel);
+        const page = state.page;
+        if (!page) return;
 
-    await page.goto(DIR.loginUrl);
+        try {
+            const base = await page.$$eval(DIR.selectors.baseWords, els => els.map(e => e.textContent));
+            const target = await page.$$eval(DIR.selectors.targetWords, els => els.map(e => e.textContent));
+
+            base.forEach((bRaw, i) => {
+                const t = cleanString(target[i] || '');
+                const b = cleanString(bRaw);
+                if (t && b) {
+                    state.dict[t] = b;
+                    state.reverseDict[b] = t.split(',')[0].trim();
+                }
+            });
+        } catch (err) {
+            // Best-effort; log if needed
+        }
+
+        try {
+            const items = await page.$$('.preview-grid .stats-item');
+            for (const item of items) {
+                const icon = await item.$('.sound-icon.has-sound');
+                if (!icon) continue;
+                const rawA = await item.$eval('.baseLanguage', el => el.textContent.trim());
+                const a = cleanString(rawA);
+                await page.evaluate(el => el.click(), icon);
+                await sleep(500);
+                const src = await page.evaluate(() => window.lastAudioSrc || null);
+                if (src) {
+                    state.audioMap[src] = a;
+                }
+            }
+        } catch (err) {
+            // Best-effort; log if needed
+        }
+
+        state.questionMode = await page.evaluate(() => {
+            return document
+                .querySelectorAll('.selected[ng-click="starter.selectLearningMode(item)"]')[0]
+                .children[1].children[0].children[0].textContent.toString();
+        });
+
+        const totalEntries = Object.keys(state.dict).length;
+        const entriesWithAudio = Object.values(state.dict).filter(v =>
+            Object.values(window.audioMap || {}).includes(v)
+        ).length;
+
+        state.stats.totalEntries = totalEntries;
+        state.stats.entriesWithAudio = entriesWithAudio;
+        state.stats.lastRefresh = new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        const message = `All word lists refreshed:\nTotal entries: ${totalEntries}\nWith audio: ${entriesWithAudio}\n\n`;
+        await page.evaluate(msg => alert(msg), message);
+
+        await Panel.sync({
+            message: `Loaded ${totalEntries} entries · ${entriesWithAudio} with audio`,
+            highlightRefresh: true
+        });
+    },
+
+    async fixAnswer() {
+        const page = state.page;
+        if (!page) return;
+
+        try {
+            await page.waitForFunction(
+                sel => document.querySelector(sel)?.textContent.trim().length > 0,
+                {},
+                DIR.selectors.modalFields.question
+            );
+
+            const modalData = await page.evaluate(selectors => {
+                const safeText = sel => {
+                    const el = document.querySelector(sel);
+                    return el ? el.textContent : '';
+                };
+                return {
+                    question: safeText(selectors.question),
+                    correct: safeText(selectors.correct)
+                };
+            }, DIR.selectors.modalFields);
+
+            const cleanedQuestion = cleanString(modalData.question);
+            const cleanedCorrect = cleanString(modalData.correct);
+
+            if (cleanedQuestion && cleanedCorrect) {
+                state.dict[cleanedQuestion] = cleanedCorrect;
+                state.reverseDict[cleanedCorrect] = cleanedQuestion.split(',')[0].trim();
+                await Panel.sync({ message: `Learned correction for "${cleanedQuestion}"` });
+            }
+
+            await page.$eval(DIR.selectors.continueButton, btn => (btn.disabled = false));
+            await page.click(DIR.selectors.continueButton);
+        } catch (err) {
+            await Panel.sync({
+                message: 'Unable to read correction modal. Please continue manually.'
+            });
+        }
+    }
+};
+
+// =======================
+// Answering Engine
+// =======================
+const Engine = {
+    async toggleRun() {
+        state.running = !state.running;
+
+        await Panel.sync({
+            message: state.running
+                ? `Answering in ${MODE_LABELS[state.mode] || state.mode} mode`
+                : 'Bot paused. Refresh (Alt+R) when changing tasks.'
+        });
+
+        if (state.running) {
+            try {
+                await Engine.loopAnswers();
+            } catch (err) {
+                state.running = false;
+            }
+
+            if (!state.running) {
+                await Panel.sync({
+                    message: 'Bot stopped. Adjust the mode or refresh to continue.'
+                });
+            }
+        }
+    },
+
+    async setMode(newMode) {
+        state.mode = newMode;
+        await Panel.sync({
+            message: state.running
+                ? `Answering in ${MODE_LABELS[state.mode] || state.mode} mode`
+                : `Mode set to ${MODE_LABELS[state.mode] || state.mode}. Press Refresh before starting.`
+        });
+    },
+
+    async loopAnswers() {
+        const page = state.page;
+        if (!page) return;
+
+        if ((state.questionMode === 'Dictation' || state.questionMode === 'Listening') &&
+            state.mode !== 'auto') {
+            await page.evaluate(msg => alert(msg),
+                'Due to some vocabulary having multiple audio, semi and delay mode may get questions wrong. Auto mode is recommended for this.'
+            );
+        }
+
+        while (state.running) {
+            let answer;
+            let qText = '';
+
+            try {
+                qText = await page.$eval(
+                    DIR.selectors.questionText,
+                    el => el.textContent.trim()
+                );
+            } catch (err) {
+                // No text question; fall back to audio
+            }
+
+            if (qText) {
+                const cleaned = cleanString(qText).split(/[;,]/)[0].trim();
+                if (state.dict[cleaned]) {
+                    answer = state.dict[cleaned];
+                } else if (state.reverseDict[cleaned]) {
+                    answer = state.reverseDict[cleaned];
+                } else {
+                    answer = randStr(8, 10);
+                }
+            } else {
+                let src = null;
+                try {
+                    const speaker = await page.$('.voice-speaker');
+                    if (speaker) {
+                        await page.evaluate(el => el.click(), speaker);
+                        await sleep(500);
+                        src = await page.evaluate(() => window.lastAudioSrc || null);
+                    }
+                } catch (err) {
+                    // ignore
+                }
+
+                if (state.questionMode === 'Dictation') {
+                    answer =
+                        (src && state.reverseDict[state.audioMap[src]]) ||
+                        randStr(8, 10);
+                } else {
+                    answer =
+                        (src && state.audioMap[src]) ||
+                        randStr(8, 10);
+                }
+            }
+
+            await page.click(DIR.selectors.answerInput, { clickCount: 3 });
+            await page.keyboard.sendCharacter(answer);
+
+            if (state.mode === 'auto') {
+                await page.keyboard.press('Enter');
+            } else if (state.mode === 'delay') {
+                await sleep(Math.random() * 3000);
+                await page.keyboard.press('Enter');
+            }
+
+            if (await page.$(DIR.selectors.modal)) {
+                await Vocabulary.fixAnswer();
+            }
+        }
+    }
+};
+
+// =======================
+// Bootstrap / Puppeteer
+// =======================
+const Bootstrap = {
+    async start() {
+        const browser = await puppeteer.launch({
+            headless: false,
+            defaultViewport: null,
+            args: ['--start-maximized']
+        });
+
+        const [page] = await browser.pages();
+        state.page = page;
+
+        // Track last played audio
+        await page.evaluateOnNewDocument(() => {
+            window.lastAudioSrc = null;
+            const origPlay = HTMLAudioElement.prototype.play;
+            HTMLAudioElement.prototype.play = function () {
+                window.lastAudioSrc = this.src;
+                return origPlay.call(this);
+            };
+        });
+
+        // Expose Node-side functions to the page
+        await page.exposeFunction('refresh', () => Vocabulary.refreshAll());
+        await page.exposeFunction('startAnswer', () => Engine.toggleRun());
+        await page.exposeFunction('setAuto', () => Engine.setMode('auto'));
+        await page.exposeFunction('setSemi', () => Engine.setMode('semi'));
+        await page.exposeFunction('setDelay', () => Engine.setMode('delay'));
+
+        page.on('load', () => Panel.init());
+
+        await page.goto(DIR.loginUrl);
+    }
+};
+
+// =======================
+// Entry Point
+// =======================
+(async () => {
+    await Bootstrap.start();
 })();
